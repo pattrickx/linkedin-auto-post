@@ -236,3 +236,17 @@ def save_articles_markdown(articles: list[Article], path: str = "articles.md") -
         lines.append("")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
+
+if __name__ == "__main__":
+    articles = asyncio.run(process_frontpages(
+        frontpage_urls=[ "https://www.anthropic.com/engineering" ],
+        date_from=date(2020, 1, 1),
+        date_to=date(2025, 12, 31),
+        model="gpt-4o-mini",
+        crawl_content=True,
+        max_articles=10,
+        max_concurrency=3,
+        progress_callback=print,
+    ))
+    save_articles_json(articles)
+    save_articles_markdown(articles)

@@ -9,7 +9,7 @@ async def main():
 
     async with AsyncWebCrawler(config=browser_config) as crawler:
         result = await crawler.arun(
-            url="https://huggingface.co/blog/penelopegittos/building-in-ai-with-academia-hub",
+            url="https://www.anthropic.com/engineering",
             config=run_config
         )
         print(result.markdown)  # Print clean markdown content

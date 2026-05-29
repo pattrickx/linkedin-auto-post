@@ -1,34 +1,30 @@
 from __future__ import annotations
 
-import ipaddress
 import time
 from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from src.extraction import process_frontpages
+from src.extraction import Article, crawl_article_content, process_frontpages
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_name: str = "linkedin-auto-post-api"
-    app_version: str = "2.0.0"
+    app_version: str = "2.2.0"
     default_model: str = "gpt-4o-mini"
     default_crawl_content: bool = True
     default_max_articles: int = 20
     max_urls: int = 25
     cors_origins: str = "*"
     allowed_hosts: str = ""
-    max_redirects: int = 5
-    request_timeout_seconds: float = 25.0
 
 
 settings = Settings()
@@ -42,13 +38,7 @@ app = FastAPI(
 )
 
 allow_origins = ["*"] if settings.cors_origins == "*" else [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=allow_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
 class ExtractRequest(BaseModel):
@@ -68,17 +58,7 @@ class ExtractRequest(BaseModel):
 
 class ExtractUrlRequest(BaseModel):
     url: HttpUrl
-    date_from: date | None = None
-    date_to: date | None = None
     model: str | None = Field(default=None, min_length=1)
-    crawl_content: bool | None = None
-    max_articles: int | None = Field(default=None, ge=1, le=100)
-
-    @model_validator(mode="after")
-    def validate_dates(self) -> "ExtractUrlRequest":
-        if self.date_from and self.date_to and self.date_from > self.date_to:
-            raise ValueError("date_from deve ser menor ou igual a date_to")
-        return self
 
 
 class ExtractError(BaseModel):
@@ -93,6 +73,10 @@ class ArticleOut(BaseModel):
     date: str | None = None
     source: str
     content_md: str | None = None
+
+    @classmethod
+    def from_article(cls, article: Article) -> "ArticleOut":
+        return cls.model_validate(article.__dict__)
 
 
 class ExtractResponse(BaseModel):
@@ -134,53 +118,25 @@ class UrlCheckResult(BaseModel):
     reason: str | None = None
 
 
-def _is_public_host(hostname: str) -> bool:
-    try:
-        ips = httpx.get(f"https://dns.google/resolve?name={hostname}&type=A", timeout=5).json().get("Answer", [])
-        for item in ips:
-            ip = item.get("data")
-            if not ip:
-                continue
-            addr = ipaddress.ip_address(ip)
-            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved or addr.is_multicast:
-                return False
-        return True
-    except Exception:
-        return True
-
-
 def validate_target_url(url: str) -> UrlCheckResult:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return UrlCheckResult(url=url, allowed=False, reason="apenas URLs http/https são aceitas")
     if not parsed.netloc:
         return UrlCheckResult(url=url, allowed=False, reason="URL inválida")
-
     host = parsed.hostname or ""
     blocked_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
     if host in blocked_hosts:
         return UrlCheckResult(url=url, allowed=False, reason="host local não permitido")
-
     allowed_hosts = {h.strip().lower() for h in settings.allowed_hosts.split(",") if h.strip()}
     if allowed_hosts and host.lower() not in allowed_hosts:
         return UrlCheckResult(url=url, allowed=False, reason="host fora da allowlist")
-
-    if not _is_public_host(host):
-        return UrlCheckResult(url=url, allowed=False, reason="host resolve para endereço privado/bloqueado")
-
     return UrlCheckResult(url=url, allowed=True)
 
 
 @app.get("/", response_model=RootResponse, tags=["system"])
 async def root() -> RootResponse:
-    return RootResponse(
-        service=settings.app_name,
-        version=settings.app_version,
-        docs="/docs",
-        health="/health",
-        extract="/extract",
-        extract_url="/extract/url",
-    )
+    return RootResponse(service=settings.app_name, version=settings.app_version, docs="/docs", health="/health", extract="/extract", extract_url="/extract/url")
 
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
@@ -197,13 +153,11 @@ async def _run_extraction(urls: list[str], date_from: date | None, date_to: date
     start = time.perf_counter()
     articles_out: list[ArticleOut] = []
     errors: list[ExtractError] = []
-
     for url in urls:
         check = validate_target_url(url)
         if not check.allowed:
             errors.append(ExtractError(url=url, message=check.reason or "url bloqueada", stage="validation"))
             continue
-
         try:
             extracted = await process_frontpages(
                 frontpage_urls=[url],
@@ -213,10 +167,9 @@ async def _run_extraction(urls: list[str], date_from: date | None, date_to: date
                 crawl_content=crawl_content,
                 max_articles=max_articles,
             )
-            articles_out.extend(ArticleOut.model_validate(a) for a in extracted)
+            articles_out.extend(ArticleOut.from_article(a) for a in extracted)
         except Exception as exc:
             errors.append(ExtractError(url=url, message=str(exc), stage="extract"))
-
     elapsed_ms = int((time.perf_counter() - start) * 1000)
     return ExtractResponse(ok=len(errors) == 0, count=len(articles_out), articles=articles_out, errors=errors, model=model, crawl_content=crawl_content, elapsed_ms=elapsed_ms)
 
@@ -231,12 +184,21 @@ async def extract(payload: ExtractRequest) -> ExtractResponse:
     return await _run_extraction([str(u) for u in payload.urls], payload.date_from, payload.date_to, model, crawl_content, max_articles)
 
 
-@app.post("/extract/url", response_model=ExtractResponse, tags=["extract"])
-async def extract_url(payload: ExtractUrlRequest) -> ExtractResponse:
+@app.post("/extract/url", response_model=ArticleOut, tags=["extract"])
+async def extract_url(payload: ExtractUrlRequest) -> ArticleOut:
+    check = validate_target_url(str(payload.url))
+    if not check.allowed:
+        raise HTTPException(status_code=400, detail=check.reason)
     model = payload.model or settings.default_model
-    crawl_content = settings.default_crawl_content if payload.crawl_content is None else payload.crawl_content
-    max_articles = payload.max_articles or settings.default_max_articles
-    return await _run_extraction([str(payload.url)], payload.date_from, payload.date_to, model, crawl_content, max_articles)
+    markdown = await crawl_article_content(str(payload.url))
+    title = urlparse(str(payload.url)).path.rstrip("/").split("/")[-1] or urlparse(str(payload.url)).netloc
+    return ArticleOut(
+        title=title,
+        url=str(payload.url),
+        date=None,
+        source=urlparse(str(payload.url)).netloc,
+        content_md=markdown,
+    )
 
 
 @app.post("/extract/stream", tags=["extract"])
@@ -248,12 +210,12 @@ async def extract_stream(payload: ExtractRequest):
     max_articles = payload.max_articles or settings.default_max_articles
 
     async def generator():
-        yield (StreamItem(type="start", message="processing").model_dump_json() + "\n")
+        yield StreamItem(type="start", message="processing").model_dump_json() + "\n"
         for raw_url in payload.urls:
             url = str(raw_url)
             check = validate_target_url(url)
             if not check.allowed:
-                yield (StreamItem(type="error", error=ExtractError(url=url, message=check.reason or "url bloqueada", stage="validation")).model_dump_json() + "\n")
+                yield StreamItem(type="error", error=ExtractError(url=url, message=check.reason or "url bloqueada", stage="validation")).model_dump_json() + "\n"
                 continue
             try:
                 extracted = await process_frontpages(
@@ -265,9 +227,9 @@ async def extract_stream(payload: ExtractRequest):
                     max_articles=max_articles,
                 )
                 for item in extracted:
-                    yield (StreamItem(type="article", article=ArticleOut.model_validate(item)).model_dump_json() + "\n")
+                    yield StreamItem(type="article", article=ArticleOut.from_article(item)).model_dump_json() + "\n"
             except Exception as exc:
-                yield (StreamItem(type="error", error=ExtractError(url=url, message=str(exc), stage="extract")).model_dump_json() + "\n")
-        yield (StreamItem(type="done", message="finished").model_dump_json() + "\n")
+                yield StreamItem(type="error", error=ExtractError(url=url, message=str(exc), stage="extract")).model_dump_json() + "\n"
+        yield StreamItem(type="done", message="finished").model_dump_json() + "\n"
 
     return StreamingResponse(generator(), media_type="application/x-ndjson")
