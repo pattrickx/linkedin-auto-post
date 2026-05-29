@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -8,15 +8,14 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       build-essential \
-       curl \
        ca-certificates \
+       curl \
        git \
+       build-essential \
        libglib2.0-0 \
        libnss3 \
-       libgconf-2-4 \
-       libatk1.0-0 \
        libatk-bridge2.0-0 \
+       libatk1.0-0 \
        libcups2 \
        libdbus-1-3 \
        libdrm2 \
@@ -34,12 +33,15 @@ RUN apt-get update \
        libxkbcommon0 \
        libxrandr2 \
        xdg-utils \
+       fonts-liberation \
+       libasound2 \
+       wget \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
-    && playwright install --with-deps chromium
+    && python -m playwright install chromium
 
 COPY . .
 
