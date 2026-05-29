@@ -1,6 +1,5 @@
 """
-extractor.py — extrai artigos de frontpages e conteúdo de páginas usando OpenAI via LangChain e crawl4ai.
-Lê OPENAI_API_KEY automaticamente do .env.
+Core de extração do projeto.
 """
 
 from __future__ import annotations
@@ -99,11 +98,10 @@ async def extract_articles(html: str, base_url: str, model: str = "gpt-4o-mini")
     ]
     result: ArticleList = await structured_llm.ainvoke(messages)
 
-    base = base_url
     output: list[dict[str, Any]] = []
     for article in result.articles:
         item = article.model_dump()
-        item["url"] = urljoin(base, item["url"])
+        item["url"] = urljoin(base_url, item["url"])
         output.append(item)
     return output
 
