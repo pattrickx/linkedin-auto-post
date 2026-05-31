@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     app_name: str = "linkedin-auto-post-api"
     app_version: str = "2.2.0"
-    default_model: str = "gpt-4o-mini"
+    default_model: str = "openrouter/owl-alpha"
     default_crawl_content: bool = True
     default_max_articles: int = 20
     max_urls: int = 25

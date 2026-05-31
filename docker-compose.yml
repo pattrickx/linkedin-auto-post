@@ -9,7 +9,7 @@ services:
       - PYTHONUNBUFFERED=1
       - APP_NAME=linkedin-auto-post-api
       - APP_VERSION=2.2.0
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     healthcheck:
       test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request, sys\ntry:\n    print(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read().decode())\nexcept Exception:\n    sys.exit(1)\nPY"]
       interval: 30s

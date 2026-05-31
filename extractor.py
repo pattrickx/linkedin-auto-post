@@ -1,12 +1,13 @@
 """
-extractor.py — extrai artigos de frontpages e conteúdo de páginas usando OpenAI via LangChain e crawl4ai.
-Lê OPENAI_API_KEY automaticamente do .env.
+extractor.py — extrai artigos de frontpages e conteúdo de páginas usando LLM via OpenRouter + LangChain e crawl4ai.
+Lê OPENROUTER_API_KEY automaticamente do .env.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from typing import Any, Optional
@@ -71,8 +72,14 @@ Regras:
 """.strip()
 
 
-def build_llm(model: str = "gpt-4o-mini") -> ChatOpenAI:
-    return ChatOpenAI(model=model, temperature=0, max_tokens=4096)
+def build_llm(model: str = "openrouter/owl-alpha") -> ChatOpenAI:
+    return ChatOpenAI(
+        model=model,
+        temperature=0,
+        max_tokens=4096,
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+    )
 
 
 async def fetch_html(url: str, timeout: int = 20) -> str:
@@ -185,13 +192,13 @@ async def process_frontpages(
             continue
 
         if progress_callback:
-            progress_callback(f"🤖 Extraindo artigos com OpenAI ({model}): {source}")
+            progress_callback(f"🤖 Extraindo artigos com LLM ({model}): {source}")
 
         try:
             raw_articles = await extract_articles(html, fp_url, model)
         except Exception as e:
             if progress_callback:
-                progress_callback(f"❌ Erro OpenAI ({source}): {e}")
+                progress_callback(f"❌ Erro LLM ({source}): {e}")
             continue
 
         filtered = filter_by_date(raw_articles, date_from, date_to)
@@ -242,7 +249,7 @@ if __name__ == "__main__":
         frontpage_urls=[ "https://www.anthropic.com/engineering" ],
         date_from=date(2020, 1, 1),
         date_to=date(2025, 12, 31),
-        model="gpt-4o-mini",
+        model="openrouter/owl-alpha",
         crawl_content=True,
         max_articles=10,
         max_concurrency=3,
